@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.81/Build/Cesium/Cesium.js"></script>
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.81/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/satellite.js/4.0.0/satellite.js"></script>
+  <link href="style.css" rel="stylesheet">
+</head>
+<body>
+
+  <div id="cesiumContainer"></div>
+  <script>
+    Cesium.Ion.defaultAccessToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI2ZjQyZTBmOS03YTFmLTQwZTMtOGQwYy1iNzM3YzNiZWY0ZWUiLCJpZCI6MTA5ODI0LCJpYXQiOjE2NjQ2MDE4MjJ9.VBDWmkK_1U15fWHKqGpjYDAamKvvIcZD5SKYcBWKdeo";
+
+    // Initialize the Cesium viewer.
+    const viewer = new Cesium.Viewer('cesiumContainer', {
+      baseLayerPicker: false, geocoder: false, homeButton: false, infoBox: false,
+      navigationHelpButton: false, sceneModePicker: false
+    });
+    
+    // Lines to predict trajectory
+    const ISS_TLE1 = `1 25544U 98067A 22275.03521722 .00046746 00000-0 83199-3 0 9990`;
+    const ISS_TLE2 = `2 25544 51.6418 167.2146 0003169 263.1060 229.2717 15.49661688361757`;
+    const satrec = satellite.twoline2satrec(
+        ISS_TLE1,ISS_TLE2
+    );
+
+    // Give SatelliteJS the TLE's and a specific time.
+    // Get back a longitude, latitude, height (km).
+    // We're going to generate a position every 10 seconds from now until 6 seconds from now. 
+    const totalSeconds = 60 * 60 * 6;
+    const timestepInSeconds = 10;
+    const start = Cesium.JulianDate.fromDate(new Date());
+    const stop = Cesium.JulianDate.addSeconds(start, totalSeconds, new Cesium.JulianDate());
+    viewer.clock.startTime = start.clone();
+    viewer.clock.stopTime = stop.clone();
+    viewer.clock.currentTime = start.clone();
+    viewer.timeline.zoomTo(start, stop);
+    viewer.clock.clockRange = Cesium.ClockRange.LOOP_STOP;
+    
+    const positionsOverTime = new Cesium.SampledPositionProperty();
+    for (let i = 0; i < totalSeconds; i+= timestepInSeconds) {
+      const time = Cesium.JulianDate.addSeconds(start, i, new Cesium.JulianDate());
+      const jsDate = Cesium.JulianDate.toDate(time);
+
+      const positionAndVelocity = satellite.propagate(satrec, jsDate);
+      const gmst = satellite.gstime(jsDate);
+      const p   = satellite.eciToGeodetic(positionAndVelocity.position, gmst);
+
+      const position = Cesium.Cartesian3.fromRadians(p.longitude, p.latitude, p.height * 100);
+      positionsOverTime.addSample(time, position);
+    }
+    
+    // Orientación nave
+    const position = Cesium.Cartesian3.fromDegrees(-123.0744619, 44.0503706, 408000);
+    const heading = Cesium.Math.toRadians(45.0);
+    const pitch = Cesium.Math.toRadians(15.0);
+    const roll = Cesium.Math.toRadians(0.0);
+    const orientation = Cesium.Transforms.headingPitchRollQuaternion(position, new Cesium.HeadingPitchRoll(heading, pitch, roll));
+
+
+    // Wait for the satellite to be downloaded
+    (async () => {
+      "use strict";
+      try {
+        const resource = await Cesium.IonResource.fromAssetId(1341048);
+        const entity = viewer.entities.add({
+          position: positionsOverTime,
+          orientation: orientation,
+          model: {
+            uri: resource,
+          },
+          path: {
+            width: 3,
+            material: Cesium.Color.RED,
+            trailTime: 0,
+            leadTime: 15000,
+            show: false
+          }
+        });
+        viewer.trackedEntity = entity;
+
+        // Wait for globe to load then display trajectory     
+        let initialized = false;
+        
+        viewer.scene.globe.tileLoadProgressEvent.addEventListener(() => {
+          if (!initialized && viewer.scene.globe.tilesLoaded === true) {
+            viewer.clock.shouldAnimate = true;
+            initialized = true;
+            entity.path.show = true;
+          }
+        });
+      } catch (error) {
+        console.log(error);
+      }
+    })();
+    
+  </script>
+</body>
+</html>
